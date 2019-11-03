@@ -182,7 +182,12 @@ output {
     index => "system-syslog-%{+YYYY.MM}"
   }
 }
-
+##########上面配置需要执行如下操作
+vim /etc/rsyslog.conf
+#### RULES ####
+*.* @@192.168.163.186:10514
+###########
+systemctl restart rsyslog
 systemctl start logstash  ##启动logstash
 systemctl status logstash  ##查看logstash 状态
  
