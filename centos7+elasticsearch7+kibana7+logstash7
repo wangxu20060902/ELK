@@ -1,0 +1,198 @@
+ELK STACK 搭建部署
+基础环境准备
+yum update -y   ##更新内核
+yum install vim wget net-tools lrzsz epel-release -y  ##安装基础工具
+hostnamectl set-hostname elk03   ###更改计算机名
+vim /etc/hosts   ##ip 主机映射
+192.168.124.160 elk02
+192.168.124.159 elk01
+192.168.124.161 elk03
+
+systemctl stop firewalld   #关闭防火墙
+systemctl disable firewalld  #禁止启动防火墙
+vim /etc/selinux/config     ##关闭selinux
+
+vim /etc/security/limits.conf 
+*  soft  nofile  65536
+*  hard  nofile  131072
+*  soft  nproc  2048
+*  hard  nproc 4096
+
+
+
+
+wget https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-7.1.1-x86_64.rpm
+wget https://artifacts.elastic.co/downloads/kibana/kibana-7.1.1-x86_64.rpm
+wget https://artifacts.elastic.co/downloads/logstash/logstash-7.1.1.rpm
+
+es 集群搭建 （依赖java环境）
+
+yum install java-11-openjdk.x86_64 -y  ##安装es 依赖jdk
+
+vim /etc/profile   ##配置环境变量
+
+export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-11.0.5.10-0.el7_7.x86_64
+export JRE_HOME=${JAVA_HOME}/jre
+export CLASSPATH=.:${JAVA_HOME}/lib/:${JRE_HOME}/lib
+export PATH=${JAVA_HOME}/bin:$PATH
+
+source /etc/profile    ##是变量生效
+
+elk01 : 192.168.124.159    ##es+kibana
+elk02 : 192.168.124.160
+elk03 : 192.168.124.161
+
+rpm -ivh elasticsearch-7.1.1-x86_64.rpm  ###安装elasticsearch
+
+elk01 ##es配置  
+
+grep -Ev "^$|^[#;]"  /etc/elasticsearch/jvm.options 
+-Xms1g
+
+grep -v "^#" /etc/elasticsearch/elasticsearch.yml
+
+cluster.name: elk
+node.name: elk01
+node.master: true
+node.data: true
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+bootstrap.memory_lock: false
+network.host: 192.168.124.159
+http.port: 9200
+transport.tcp.port: 9300
+discovery.zen.minimum_master_nodes: 2
+discovery.seed_hosts: ["192.168.124.159:9300", "192.168.124.160:9300", "192.168.124.161:9300"] 
+discovery.zen.fd.ping_timeout: 1m
+discovery.zen.fd.ping_retries: 5
+cluster.initial_master_nodes: ["elk01", "elk02", "elk03"]
+http.cors.enabled: true
+
+elk02  ##es配置
+
+grep -Ev "^$|^[#;]"  /etc/elasticsearch/jvm.options 
+-Xms1g
+
+grep -v "^#" /etc/elasticsearch/elasticsearch.yml
+
+cluster.name: elk
+node.name: elk02
+node.master: true
+node.data: true
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+bootstrap.memory_lock: false
+
+network.host: 192.168.124.160
+http.port: 9200
+transport.tcp.port: 9300
+discovery.zen.minimum_master_nodes: 2
+discovery.seed_hosts: ["192.168.124.159:9300", "192.168.124.160:9300", "192.168.124.161:9300"] 
+discovery.zen.fd.ping_timeout: 1m
+discovery.zen.fd.ping_retries: 5
+cluster.initial_master_nodes: ["elk01", "elk02", "elk03"]
+http.cors.enabled: true
+ 
+elk03  ##es配置
+
+grep -Ev "^$|^[#;]"  /etc/elasticsearch/jvm.options 
+-Xms1g
+
+grep -v "^#" /etc/elasticsearch/elasticsearch.yml
+
+cluster.name: elk
+node.name: elk03
+node.master: true
+node.data: true
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+bootstrap.memory_lock: false
+
+network.host: 192.168.124.161
+http.port: 9200
+transport.tcp.port: 9300
+discovery.zen.minimum_master_nodes: 2
+discovery.seed_hosts: ["192.168.124.159:9300", "192.168.124.160:9300", "192.168.124.161:9300"] 
+discovery.zen.fd.ping_timeout: 1m
+discovery.zen.fd.ping_retries: 5
+cluster.initial_master_nodes: ["elk01", "elk02", "elk03"]
+http.cors.enabled: true
+
+systemctl start elasticsearch
+systemctl status elasticsearch
+
+可以通过 http://192.168.124.159:9200/_cluster/health?pretty
+
+#查看集群的健康信息
+curl 'localhost:9200/_cluster/health?pretty'
+#查看集群的详细信息
+curl ' localhost:9200/_cluster/state?pretty'
+#查询索引列表
+curl -XGET http:// localhost:9200/_cat/indices?v
+#创建索引
+curl -XPUT http:// localhost:9200/customer?pretty
+#查询索引
+curl -XGET http:// localhost:9200/customer/external/1?pretty
+#查询es数据
+curl -XGET 'http://localhost:9200/_cat/count/索引名称'
+#删除索引
+curl -XDELETE http:// localhost:9200/customer?pretty
+#删除指定索引
+curl -XDELETE localhost:9200/nginx-log-2019.08
+#删除多个索引
+curl -XDELETE localhost:9200/system-log-2019.0606,system-log-2019.0607
+#删除所有索引
+curl -XDELETE localhost:9200/_all
+#在删除数据时，通常不建议使用通配符，误删后果会很严重，所有的index都可能被删除,为了安全起见需要禁止通配符，可以在elasticsearch.yml配置文件中设置禁用_all和*通配符
+action.destructive_requires_name: true
+
+
+kibana 安装和配置
+
+rpm -ivh kibana-7.1.1-x86_64.rpm 
+
+vim /etc/kibana/kibana.yml
+
+server.port: 5601 
+server.host: "0.0.0.0"
+elasticsearch.hosts: ["http:192.168.124.159:9200"]
+i18n.locale: "zh-CN"
+
+systemctl start kibana
+systemctl status kibana
+
+启动完成通过
+curl 192.168.124.159:5601 验证
+或者通过浏览器访问 192.168.124.159:5601
+
+logstash  安装配置
+
+rpm -ivh logstash-7.1.1.rpm   ##安装logstash
+vim /etc/logstash/conf.d/syslog.conf   #编写一个测试文件
+
+input {
+  syslog {
+    type => "system-syslog"
+    port => 10514
+  }
+}
+output {
+  elasticsearch {
+    hosts => ["192.168.124.159:9200"]
+    index => "system-syslog-%{+YYYY.MM}"
+  }
+}
+
+systemctl start logstash  ##启动logstash
+systemctl status logstash  ##查看logstash 状态
+ 
+ 测试脚本是否正确可以通过以下命令测试
+ 
+cd /usr/share/logstash/bin/
+./logstash --path.settings /etc/logstash/ -f /etc/logstash/conf.d/syslog.conf --config.test_and_exit 
+
+注意：本次启动出现了两个错误 需要如下操作
+chown logstash /var/log/logstash/logstash-plain.log
+chown -R logstash /var/lib/logstash
+
+然后重启logstash
