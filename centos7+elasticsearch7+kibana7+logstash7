@@ -155,7 +155,7 @@ vim /etc/kibana/kibana.yml
 
 server.port: 5601 
 server.host: "0.0.0.0"
-elasticsearch.hosts: ["http:192.168.124.159:9200"]
+elasticsearch.hosts: ["http://192.168.124.159:9200"]
 i18n.locale: "zh-CN"
 
 systemctl start kibana
