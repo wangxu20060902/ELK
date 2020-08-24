@@ -1,203 +1,399 @@
-ELK STACK 搭建部署
-基础环境准备
-yum update -y   ##更新内核
-yum install vim wget net-tools lrzsz epel-release -y  ##安装基础工具
-hostnamectl set-hostname elk03   ###更改计算机名
-vim /etc/hosts   ##ip 主机映射
-192.168.124.160 elk02
-192.168.124.159 elk01
-192.168.124.161 elk03
+ELK 集群配置部署  https://blog.csdn.net/miss1181248983/article/details/89384990
+es主节点/es数据节点/kibana/head                 192.168.140.133
+es主节点/es数据节点/logstash                    192.168.140.134
+es主节点/es数据节点/filebeat                    192.168.140.135
 
-systemctl stop firewalld   #关闭防火墙
-systemctl disable firewalld  #禁止启动防火墙
-vim /etc/selinux/config     ##关闭selinux
+全部配置系统环境：
+vim /etc/security/limits.conf
+* soft nofile 65536
+* hard nofile 131072
+* soft nproc 2048
+* hard nproc 4096
 
-vim /etc/security/limits.conf 
-*  soft  nofile  65536
-*  hard  nofile  131072
-*  soft  nproc  2048
-*  hard  nproc 4096
+vim /etc/sysctl.conf
+vm.max_map_count=655360
 
+# sysctl -p
 
+首先要去下载好JDK，Java SE 8的官方网址是http://www.oracle.com/technetwork/java/javase/downloads/jdk8-downloads-2133151.html
+Linux提供了两种安装方式一个是.rpm，另一个是.tar.gz，我所使用的是.tar.gz
+tar zxvf jdk-8u251-linux-x64.tar.gz
+mv jdk1.8.0_251/ /usr/local/java
+设置环境变量，需要修改/etc/profile文件
+vim /etc/profile
 
+export JAVA_HOME=/usr/local/java
+export JRE_HOME=/usr/local/java/jre
+export CLASSPATH=.:$JAVA_HOME/lib:$JRE_HOME/lib:$CLASSPATH
+export PATH=$JAVA_HOME/bin:$JRE_HOME/bin:$PATH
+使环境变量生效
+source /etc/profile
+查看java 信息
+java -version  
 
-wget https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-7.1.1-x86_64.rpm
-wget https://artifacts.elastic.co/downloads/kibana/kibana-7.1.1-x86_64.rpm
-wget https://artifacts.elastic.co/downloads/logstash/logstash-7.1.1.rpm
+elasticsearch 集群部署
+groupadd elk
+useradd  elk -g elk
 
-es 集群搭建 （依赖java环境）
+wget https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-7.8.0-linux-x86_64.tar.gz
+tar zxvf elasticsearch-7.8.0-linux-x86_64.tar.gz
+mv elasticsearch-7.8.0 /usr/local/elasticsearch
 
-yum install java-11-openjdk.x86_64 -y  ##安装es 依赖jdk
+mkdir -p  /usr/local/elasticsearch/{data,log}
 
-vim /etc/profile   ##配置环境变量
-
-export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-11.0.5.10-0.el7_7.x86_64
-export JRE_HOME=${JAVA_HOME}/jre
-export CLASSPATH=.:${JAVA_HOME}/lib/:${JRE_HOME}/lib
-export PATH=${JAVA_HOME}/bin:$PATH
-
-source /etc/profile    ##是变量生效
-
-elk01 : 192.168.124.159    ##es+kibana
-elk02 : 192.168.124.160
-elk03 : 192.168.124.161
-
-rpm -ivh elasticsearch-7.1.1-x86_64.rpm  ###安装elasticsearch
-
-elk01 ##es配置  
-
-grep -Ev "^$|^[#;]"  /etc/elasticsearch/jvm.options 
--Xms1g
-
-grep -v "^#" /etc/elasticsearch/elasticsearch.yml
-
-cluster.name: elk
-node.name: elk01
-node.master: true
-node.data: true
-path.data: /var/lib/elasticsearch
-path.logs: /var/log/elasticsearch
-bootstrap.memory_lock: false
-network.host: 192.168.124.159
-http.port: 9200
-transport.tcp.port: 9300
-discovery.zen.minimum_master_nodes: 2
-discovery.seed_hosts: ["192.168.124.159:9300", "192.168.124.160:9300", "192.168.124.161:9300"] 
-discovery.zen.fd.ping_timeout: 1m
-discovery.zen.fd.ping_retries: 5
-cluster.initial_master_nodes: ["elk01", "elk02", "elk03"]
+vim /usr/local/elasticsearch/config/elasticsearch.yml
+################elk01 ip：192.168.140.133##################
+path.data: /usr/local/elasticsearch/data #数据
+path.logs: /usr/local/elasticsearch/log #日志
+cluster.name: elk-cluster # 集群中的名称
+cluster.initial_master_nodes: ["192.168.140.133","192.168.140.134","192.168.140.135"] #主节点
+node.name: elk01 # 该节点名称，与前面配置hosts保持一致
+node.master: true # 意思是该节点是否可选举为主节点
+node.data: true # 表示这不是数据节点
+network.host: 192.168.140.133 # 监听全部ip，在实际环境中应为一个安全的ip
+http.port: 9200 # es服务的端口号
 http.cors.enabled: true
+http.cors.allow-origin: "*"
+discovery.zen.ping.unicast.hosts: ["192.168.140.133","192.168.140.134","192.168.140.135"] # 配置自动发现
+discovery.zen.minimum_master_nodes: 2 #防止集群“脑裂”，需要配置集群最少主节点数目，通常为 (主节点数目/2) + 1
 
-elk02  ##es配置
-
-grep -Ev "^$|^[#;]"  /etc/elasticsearch/jvm.options 
--Xms1g
-
-grep -v "^#" /etc/elasticsearch/elasticsearch.yml
-
-cluster.name: elk
-node.name: elk02
-node.master: true
-node.data: true
-path.data: /var/lib/elasticsearch
-path.logs: /var/log/elasticsearch
-bootstrap.memory_lock: false
-
-network.host: 192.168.124.160
-http.port: 9200
-transport.tcp.port: 9300
-discovery.zen.minimum_master_nodes: 2
-discovery.seed_hosts: ["192.168.124.159:9300", "192.168.124.160:9300", "192.168.124.161:9300"] 
-discovery.zen.fd.ping_timeout: 1m
-discovery.zen.fd.ping_retries: 5
-cluster.initial_master_nodes: ["elk01", "elk02", "elk03"]
+################elk02 ip：192.168.140.134##################
+path.data: /usr/local/elasticsearch/data #数据
+path.logs: /usr/local/elasticsearch/log #日志
+cluster.name: elk-cluster # 集群中的名称
+cluster.initial_master_nodes: ["192.168.140.133","192.168.140.134","192.168.140.135"] #主节点
+node.name: elk02 # 该节点名称，与前面配置hosts保持一致
+node.master: true # 意思是该节点是否可选举为主节点
+node.data: true # 表示这不是数据节点
+network.host: 192.168.140.134 # 监听全部ip，在实际环境中应为一个安全的ip
+http.port: 9200 # es服务的端口号
 http.cors.enabled: true
- 
-elk03  ##es配置
+http.cors.allow-origin: "*"
+discovery.zen.ping.unicast.hosts: ["192.168.140.133","192.168.140.134","192.168.140.135"] # 配置自动发现
+discovery.zen.minimum_master_nodes: 2 #防止集群“脑裂”，需要配置集群最少主节点数目，通常为 (主节点数目/2) + 1
 
-grep -Ev "^$|^[#;]"  /etc/elasticsearch/jvm.options 
--Xms1g
-
-grep -v "^#" /etc/elasticsearch/elasticsearch.yml
-
-cluster.name: elk
-node.name: elk03
-node.master: true
-node.data: true
-path.data: /var/lib/elasticsearch
-path.logs: /var/log/elasticsearch
-bootstrap.memory_lock: false
-
-network.host: 192.168.124.161
-http.port: 9200
-transport.tcp.port: 9300
-discovery.zen.minimum_master_nodes: 2
-discovery.seed_hosts: ["192.168.124.159:9300", "192.168.124.160:9300", "192.168.124.161:9300"] 
-discovery.zen.fd.ping_timeout: 1m
-discovery.zen.fd.ping_retries: 5
-cluster.initial_master_nodes: ["elk01", "elk02", "elk03"]
+################elk03 ip：192.168.140.135##################
+path.data: /usr/local/elasticsearch/data #数据
+path.logs: /usr/local/elasticsearch/log #日志
+cluster.name: elk-cluster # 集群中的名称
+cluster.initial_master_nodes: ["192.168.140.133","192.168.140.134","192.168.140.135"] #主节点
+node.name: elk03 # 该节点名称，与前面配置hosts保持一致
+node.master: true # 意思是该节点是否可选举为主节点
+node.data: true # 表示这不是数据节点
+network.host: 192.168.140.135 # 监听全部ip，在实际环境中应为一个安全的ip
+http.port: 9200 # es服务的端口号
 http.cors.enabled: true
+http.cors.allow-origin: "*"
+discovery.zen.ping.unicast.hosts: ["192.168.140.133","192.168.140.134","192.168.140.135"] # 配置自动发现
+discovery.zen.minimum_master_nodes: 2 #防止集群“脑裂”，需要配置集群最少主节点数目，通常为 (主节点数目/2) + 1
+
+vim /usr/local/elasticsearch/config/jvm.options
+#修改这两行
+-Xms2g #设置最小堆的值为4g
+-Xmx2g #设置组大堆的值为4g
+
+
+解决bootstrap.memory_lock: true报错
+vim /etc/security/limits.conf
+
+baoshan soft memlock unlimited
+baoshan hard memlock unlimited
+
+vim /etc/sysctl.conf 
+
+vm.swappiness=0
+
+reboot
+
+vim /usr/lib/systemd/system/elasticsearch.service
+
+[Unit]
+Description=Elasticsearch
+Documentation=http://www.elastic.co
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+RuntimeDirectory=elasticsearch
+PrivateTmp=true
+Environment=ES_HOME=/usr/local/elasticsearch
+Environment=ES_PATH_CONF=/usr/local/elasticsearch/config
+Environment=PID_DIR=/usr/local/elasticsearch/run
+EnvironmentFile=-/etc/sysconfig/elasticsearch
+
+WorkingDirectory=/usr/local/elasticsearch
+
+User=elk
+Group=elk
+
+ExecStart=/usr/local/elasticsearch/bin/elasticsearch -p ${PID_DIR}/elasticsearch.pid --quiet
+
+# StandardOutput is configured to redirect to journalctl since
+# some error messages may be logged in standard output before
+# elasticsearch logging system is initialized. Elasticsearch
+# stores its logs in /var/log/elasticsearch and does not use
+# journalctl by default. If you also want to enable journalctl
+# logging, you can simply remove the "quiet" option from ExecStart.
+StandardOutput=journal
+StandardError=inherit
+
+# Specifies the maximum file descriptor number that can be opened by this process
+LimitNOFILE=65535
+
+# Specifies the maximum number of processes
+LimitNPROC=4096
+
+# Specifies the maximum size of virtual memory
+LimitAS=infinity
+
+# Specifies the maximum file size
+LimitFSIZE=infinity
+
+# Disable timeout logic and wait until process is stopped
+TimeoutStopSec=0
+
+# SIGTERM signal is used to stop the Java process
+KillSignal=SIGTERM
+
+# Send the signal only to the JVM rather than its control group
+KillMode=process
+
+# Java process is never killed
+SendSIGKILL=no
+
+# When a JVM receives a SIGTERM signal it exits with code 143
+SuccessExitStatus=143
+
+[Install]
+WantedBy=multi-user.target
+
+###报错1
+
+max virtual memory areas vm.max_map_count [65530] is too low, increase to at least [262144]
+
+在/etc/sysctl.conf文件最后添加一行
+
+vm.max_map_count=262144
+执行/sbin/sysctl -p 立即生效
 
 systemctl start elasticsearch
-systemctl status elasticsearch
+systemctl enable elasticsearch
 
-可以通过 http://192.168.124.159:9200/_cluster/health?pretty
+curl '192.168.140.133:9200/_cluster/health?pretty'
+{
+  "cluster_name" : "elk-cluster",
+  "status" : "green",
+  "timed_out" : false,
+  "number_of_nodes" : 3,
+  "number_of_data_nodes" : 3,
+  "active_primary_shards" : 0,
+  "active_shards" : 0,
+  "relocating_shards" : 0,
+  "initializing_shards" : 0,
+  "unassigned_shards" : 0,
+  "delayed_unassigned_shards" : 0,
+  "number_of_pending_tasks" : 0,
+  "number_of_in_flight_fetch" : 0,
+  "task_max_waiting_in_queue_millis" : 0,
+  "active_shards_percent_as_number" : 100.0
+}
 
-#查看集群的健康信息
-curl 'localhost:9200/_cluster/health?pretty'
-#查看集群的详细信息
-curl ' localhost:9200/_cluster/state?pretty'
-#查询索引列表
-curl -XGET http:// localhost:9200/_cat/indices?v
-#创建索引
-curl -XPUT http:// localhost:9200/customer?pretty
-#查询索引
-curl -XGET http:// localhost:9200/customer/external/1?pretty
-#查询es数据
-curl -XGET 'http://localhost:9200/_cat/count/索引名称'
-#删除索引
-curl -XDELETE http:// localhost:9200/customer?pretty
-#删除指定索引
-curl -XDELETE localhost:9200/nginx-log-2019.08
-#删除多个索引
-curl -XDELETE localhost:9200/system-log-2019.0606,system-log-2019.0607
-#删除所有索引
-curl -XDELETE localhost:9200/_all
-#在删除数据时，通常不建议使用通配符，误删后果会很严重，所有的index都可能被删除,为了安全起见需要禁止通配符，可以在elasticsearch.yml配置文件中设置禁用_all和*通配符
-action.destructive_requires_name: true
+###kibana 安装
+wget https://artifacts.elastic.co/downloads/kibana/kibana-7.8.0-linux-x86_64.tar.gz
+tar zxvf kibana-7.8.0-linux-x86_64.tar.gz -C /usr/local/
+cd /usr/local/ && mv kibana-7.8.0-linux-x86_64 kibana
+
+修改配置：
+vim /usr/local/kibana/config/kibana.yml
+server.port: 5601
+server.host: "192.168.140.133"
+elasticsearch.hosts: ["http://192.168.140.133:9200","http://192.168.140.134:9200","http://192.168.140.135:9200"]
+kibana.index: ".kibana"
+logging.dest: /usr/local/kibana/logs/kibana.log 
+
+mkdir /usr/local/kibana/logs && touch /usr/local/kibana/logs/kibana.log
+
+启动kibana：
+# /usr/local/kibana/bin/kibana &
+
+配置成kibana服务：
+服务配置文件
+
+# vim /etc/default/kibana
+user="elk"
+group="elk"
+chroot="/"
+chdir="/"
+nice=""
 
 
-kibana 安装和配置
+# If this is set to 1, then when `stop` is called, if the process has
+# not exited within a reasonable time, SIGKILL will be sent next.
+# The default behavior is to simply log a message "program stop failed; still running"
+KILL_ON_STOP_TIMEOUT=0
 
-rpm -ivh kibana-7.1.1-x86_64.rpm 
+配置服务文件
+vim /etc/systemd/system/kibana.service
 
-vim /etc/kibana/kibana.yml
+[Unit]
+Description=Kibana
+StartLimitIntervalSec=30
+StartLimitBurst=3
 
-server.port: 5601 
-server.host: "0.0.0.0"
-elasticsearch.hosts: ["http://192.168.124.159:9200"]
+[Service]
+Type=simple
+User=elk
+Group=elk
+# Load env vars from /etc/default/ and /etc/sysconfig/ if they exist.
+# Prefixing the path with '-' makes it try to load, but if the file doesn't
+# exist, it continues onward.
+EnvironmentFile=-/etc/default/kibana
+EnvironmentFile=-/etc/sysconfig/kibana
+ExecStart=/usr/local/kibana/bin/kibana "-c /usr/local/kibana/config/kibana.yml"
+Restart=always
+WorkingDirectory=/
+
+[Install]
+WantedBy=multi-user.target
+
+chown -R elk:elk /usr/local/kibana
+
+# systemctl daemon-reload
+
+# systemctl enable kibana
+
+# systemctl start kibana  
+
+kibana 配置中文
+
+vim /usr/local/kibana/config/kibana.yml
+####配置中文显示
 i18n.locale: "zh-CN"
 
-systemctl start kibana
-systemctl status kibana
+登录：192.168.140.133：5601
 
-启动完成通过
-curl 192.168.124.159:5601 验证
-或者通过浏览器访问 192.168.124.159:5601
+logstash 安装部署
 
-logstash  安装配置
+wget https://artifacts.elastic.co/downloads/logstash/logstash-7.8.0.tar.gz
+tar zxvf  logstash-7.8.0.tar.gz && mv logstash-7.8.0 /usr/local/logstash
 
-rpm -ivh logstash-7.1.1.rpm   ##安装logstash
-vim /etc/logstash/conf.d/syslog.conf   #编写一个测试文件
+修改配置：
+vim /usr/local/logstash/config/logstash.yml
+
+http.host: "192.168.140.133"
+http.port: 9600
+
+以收集nginx 访问日志为例：
+
+yum install -y nginx
+
+vim /etc/nginx/nginx.conf
+
+log_format main2 '$http_host $remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$upstream_addr" $request_time';
+
+
+vim /etc/nginx/conf.d/elk.conf
+
+server {
+      listen 80;
+      server_name elk.test.com;
+
+      location / {
+          proxy_pass      http://192.168.30.128:5601;
+          proxy_set_header Host   $host;
+          proxy_set_header X-Real-IP      $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      }
+}
+
+vim /usr/local/logstash/conf.d/nginx_access.conf
 
 input {
-  syslog {
-    type => "system-syslog"
-    port => 10514
+  file {
+    path => "/var/log/nginx/access.log"                 #设置为nginx访问日志的路径     
+    start_position => "beginning"
+    type => "nginx"
   }
+}
+filter {
+    grok {
+        match => { "message" => "%{IPORHOST:http_host} %{IPORHOST:clientip} - %{USERNAME:remote_user} \[%{HTTPDATE:timestamp}\] \"(?:%{WORD:http_verb} %{NOTSPACE:http_request}(?: HTTP/%{NUMBER:http_version})?|%{DATA:raw_http_request})\" %{NUMBER:response} (?:%{NUMBER:bytes_read}|-) %{QS:referrer} %{QS:agent} %{QS:xforwardedfor} %{NUMBER:request_time:float}"}
+    }
+    geoip {
+        source => "clientip"
+    }
 }
 output {
-  elasticsearch {
-    hosts => ["192.168.124.159:9200"]
-    index => "system-syslog-%{+YYYY.MM}"
+    stdout { codec => rubydebug }
+    elasticsearch {
+        hosts => ["192.168.140.133:9200","192.168.140.134:9200","192.168.140.135:9200"]                #也可以为集群内其它机器的地址
+        index => "nginx-logs-%{+YYYY.MM.dd}"
   }
 }
-##########上面配置需要执行如下操作
-vim /etc/rsyslog.conf
-#### RULES ####
-*.* @@192.168.163.186:10514
-###########
-systemctl restart rsyslog
-systemctl start logstash  ##启动logstash
-systemctl status logstash  ##查看logstash 状态
- 
- 测试脚本是否正确可以通过以下命令测试
- 
-cd /usr/share/logstash/bin/
-./logstash --path.settings /etc/logstash/ -f /etc/logstash/conf.d/syslog.conf --config.test_and_exit 
 
-注意：本次启动出现了两个错误 需要如下操作
-chown logstash /var/log/logstash/logstash-plain.log
-chown -R logstash /var/lib/logstash
 
-然后重启logstash
+启动logstash：
+
+systemctl start nginx
+
+# nohup /usr/local/logstash/bin/logstash --path.settings /usr/local/logstash/ -f /usr/local/logstash/conf.d/nginx_access.conf &
+
+可以登录到：192.168.140.134  进行验证
+配置logstash服务
+服务配置文件
+vim /etc/default/logstash
+ 
+LS_HOME="/usr/local/logstash"
+LS_SETTINGS_DIR="/usr/local/logstash"
+LS_PIDFILE="/usr/local/logstash/run/logstash.pid"
+LS_USER="elk"
+LS_GROUP="elk"
+LS_GC_LOG_FILE="/usr/local/logstash/logs/gc.log"
+LS_OPEN_FILES="16384"
+LS_NICE="19"
+SERVICE_NAME="logstash"
+SERVICE_DESCRIPTION="logstash"
+
+服务文件
+vim /etc/systemd/system/logstash.service 
+
+[Unit]
+Description=logstash
+
+[Service]
+Type=simple
+User=elk
+Group=elk
+# Load env vars from /etc/default/ and /etc/sysconfig/ if they exist.
+# Prefixing the path with '-' makes it try to load, but if the file doesn't
+# exist, it continues onward.
+EnvironmentFile=-/etc/default/logstash
+EnvironmentFile=-/etc/sysconfig/logstash
+ExecStart=/usr/local/logstash/bin/logstash "--path.settings" "/usr/local/logstash/config" "--path.config" "/usr/local/logstash/conf.d"
+Restart=always
+WorkingDirectory=/
+Nice=19
+LimitNOFILE=16384
+
+[Install]
+WantedBy=multi-user.target
+
+mkdir /usr/local/logstash/{run，logs} && touch /usr/local/logstash/run/logstash.pid 
+
+# touch /usr/local/logstash/logs/gc.log && chown -R elk:elk /usr/local/logstash 
+
+# systemctl daemon-reload 
+
+# systemctl enable logstash 
+
+# systemctl start logstash                  #先kill之前的logstash进程 
+####*******************坑： 注意日志的读取权限必须又*********************
+
+
+ 安装部署filebeat
+ 
+wget https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-7.8.0-linux-x86_64.tar.gz
+
+tar zxvf filebeat-7.8.0-linux-x86_64.tar.gz &&  mv filebeat-7.8.0-linux-x86_64 /usr/local/filebeat
